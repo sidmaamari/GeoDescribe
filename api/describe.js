@@ -1,74 +1,46 @@
-// geodescribe/api/describe.js
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+async function generateWith(model) {
+  const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.4,
+      messages: [
+        { role: "system", content: "You are a concise, careful exploration geologist." },
+        { role: "user", content: prompt },
+      ],
+    }),
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    const err = new Error(txt);
+    err.status = r.status;
+    throw err;
   }
+  const data = await r.json();
+  return data?.choices?.[0]?.message?.content?.trim() || "";
+}
 
-  try {
-    // --- Safe body parsing for all cases ---
-    let payload = req.body;
-    if (!payload) {
-      // In some runtimes, body may not be auto-parsed:
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      const raw = Buffer.concat(chunks).toString("utf8") || "{}";
-      payload = JSON.parse(raw);
-    } else if (typeof payload === "string") {
-      payload = JSON.parse(payload || "{}");
+let description;
+try {
+  // Start with an accessible model
+  description = await generateWith("gpt-4o-mini");
+} catch (e) {
+  // Optional: try a secondary model if you want
+  if (e.status === 429 || e.status === 503) {
+    try {
+      description = await generateWith("gpt-3.5-turbo");
+    } catch (e2) {
+      return res.status(500).json({ error: `Fallback failed: ${String(e2.message || e2)}` });
     }
-
-    const { form = {}, photoSummary = null, pxrfSummary = null } = payload;
-
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ error: "Missing OPENAI_API_KEY" });
-    }
-
-    const prompt = `
-You are an exploration geologist. Write a concise professional field description and interpretation.
-
-FORM:
-${JSON.stringify(form, null, 2)}
-
-PHOTO SUMMARY:
-${JSON.stringify(photoSummary || {}, null, 2)}
-
-PXRF SUMMARY:
-${JSON.stringify(pxrfSummary || {}, null, 2)}
-
-Respond in markdown with:
-- **Description** (colour, lustre, grain size, fabric, minerals/alteration, magnetism/HCl)
-- **Interpretation** (likely rock type / context)
-- **Sampling suggestions** (1–2 bullets if warranted)
-Keep it under 180 words.
-`.trim();
-
-    // --- Call OpenAI via fetch (no SDK) ---
-    const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.4,
-        messages: [
-          { role: "system", content: "You are a concise, careful exploration geologist." },
-          { role: "user", content: prompt },
-        ],
-      }),
-    });
-
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      return res.status(500).json({ error: `Upstream ${aiRes.status}: ${errText}` });
-    }
-
-    const data = await aiRes.json();
-    const text = data?.choices?.[0]?.message?.content?.trim() || "";
-    return res.status(200).json({ description: text });
-  } catch (err) {
-    return res.status(500).json({ error: String(err?.message || err) });
+  } else if (e.status === 401) {
+    return res.status(500).json({ error: "API key lacks model.request scope or model access." });
+  } else {
+    return res.status(500).json({ error: `Upstream ${e.status || ""}: ${String(e.message || e)}` });
   }
 }
+
+return res.status(200).json({ description });
