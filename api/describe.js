@@ -1,46 +1,69 @@
-async function generateWith(model) {
-  const r = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.4,
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY, // Make sure you added this in Vercel settings
+});
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  try {
+    const { form, photoAnalysis } = req.body;
+
+    // Basic validation
+    if (!form) {
+      return res.status(400).json({ error: "Missing form data" });
+    }
+
+    // Build a structured prompt for the model
+    const prompt = `
+You are a professional exploration geologist writing a concise sample description for a field database.
+Summarize the geological characteristics of the rock based on the following details:
+
+Sample ID: ${form.sampleId || "N/A"}
+Project: ${form.project || "N/A"}
+Location: Lat ${form.lat || "N/A"}, Lon ${form.lon || "N/A"}, Elevation: ${form.elevation || "N/A"} m
+Host Unit / Formation: ${form.hostUnit || "N/A"}
+Weathering Grade: ${form.weatheringGrade || "N/A"}
+Hardness: ${form.hardness || "N/A"}
+Colour (Fresh): ${form.colourFresh || "N/A"}
+Colour (Weathered): ${form.colourWeathered || "N/A"}
+Lustre: ${form.lustre || "N/A"}
+Grain Size: ${form.grainSize || "N/A"}
+Fabric: ${form.fabric || "N/A"}
+Streak: ${form.streak || "N/A"}
+Magnetism: ${form.magnetism || "N/A"}
+HCl Reaction: ${form.hcl || "N/A"}
+Specific Gravity: ${form.sg || "N/A"}
+Minerals: ${(form.minerals || []).join(", ") || "N/A"}
+Alteration: ${(form.alteration || []).join(", ") || "N/A"}
+Sulfides: ${(form.sulfides || []).join(", ") || "N/A"}
+Structures: ${form.structures || "N/A"}
+Mineralization Notes: ${form.mineralizationNotes || "N/A"}
+
+If any photo analysis is available:
+${photoAnalysis ? `Photo suggests: ${photoAnalysis}` : "No photo analysis provided."}
+
+Write the description in 2–3 short, professional sentences suitable for a geological log. Use formal geological terminology and avoid repetition.
+    `;
+
+    // Call GPT-4 for the description
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "You are a concise, careful exploration geologist." },
+        { role: "system", content: "You are an expert exploration geologist." },
         { role: "user", content: prompt },
       ],
-    }),
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    const err = new Error(txt);
-    err.status = r.status;
-    throw err;
-  }
-  const data = await r.json();
-  return data?.choices?.[0]?.message?.content?.trim() || "";
-}
+      temperature: 0.4,
+    });
 
-let description;
-try {
-  // Start with an accessible model
-  description = await generateWith("gpt-4o-mini");
-} catch (e) {
-  // Optional: try a secondary model if you want
-  if (e.status === 429 || e.status === 503) {
-    try {
-      description = await generateWith("gpt-3.5-turbo");
-    } catch (e2) {
-      return res.status(500).json({ error: `Fallback failed: ${String(e2.message || e2)}` });
-    }
-  } else if (e.status === 401) {
-    return res.status(500).json({ error: "API key lacks model.request scope or model access." });
-  } else {
-    return res.status(500).json({ error: `Upstream ${e.status || ""}: ${String(e.message || e)}` });
+    const text = completion.choices[0].message.content.trim();
+
+    return res.status(200).json({ description: text });
+  } catch (error) {
+    console.error("Error generating geological description:", error);
+    return res.status(500).json({ error: "Failed to generate geological description." });
   }
 }
-
-return res.status(200).json({ description });
