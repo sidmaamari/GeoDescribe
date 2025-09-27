@@ -1,69 +1,74 @@
-import OpenAI from "openai";
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // Make sure you added this in Vercel settings
-});
-
+// geodescribe/api/describe.js
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    const { form, photoAnalysis } = req.body;
-
-    // Basic validation
-    if (!form) {
-      return res.status(400).json({ error: "Missing form data" });
+    // --- Safe body parsing for all cases ---
+    let payload = req.body;
+    if (!payload) {
+      // In some runtimes, body may not be auto-parsed:
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const raw = Buffer.concat(chunks).toString("utf8") || "{}";
+      payload = JSON.parse(raw);
+    } else if (typeof payload === "string") {
+      payload = JSON.parse(payload || "{}");
     }
 
-    // Build a structured prompt for the model
+    const { form = {}, photoSummary = null, pxrfSummary = null } = payload;
+
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "Missing OPENAI_API_KEY" });
+    }
+
     const prompt = `
-You are a professional exploration geologist writing a concise sample description for a field database.
-Summarize the geological characteristics of the rock based on the following details:
+You are an exploration geologist. Write a concise professional field description and interpretation.
 
-Sample ID: ${form.sampleId || "N/A"}
-Project: ${form.project || "N/A"}
-Location: Lat ${form.lat || "N/A"}, Lon ${form.lon || "N/A"}, Elevation: ${form.elevation || "N/A"} m
-Host Unit / Formation: ${form.hostUnit || "N/A"}
-Weathering Grade: ${form.weatheringGrade || "N/A"}
-Hardness: ${form.hardness || "N/A"}
-Colour (Fresh): ${form.colourFresh || "N/A"}
-Colour (Weathered): ${form.colourWeathered || "N/A"}
-Lustre: ${form.lustre || "N/A"}
-Grain Size: ${form.grainSize || "N/A"}
-Fabric: ${form.fabric || "N/A"}
-Streak: ${form.streak || "N/A"}
-Magnetism: ${form.magnetism || "N/A"}
-HCl Reaction: ${form.hcl || "N/A"}
-Specific Gravity: ${form.sg || "N/A"}
-Minerals: ${(form.minerals || []).join(", ") || "N/A"}
-Alteration: ${(form.alteration || []).join(", ") || "N/A"}
-Sulfides: ${(form.sulfides || []).join(", ") || "N/A"}
-Structures: ${form.structures || "N/A"}
-Mineralization Notes: ${form.mineralizationNotes || "N/A"}
+FORM:
+${JSON.stringify(form, null, 2)}
 
-If any photo analysis is available:
-${photoAnalysis ? `Photo suggests: ${photoAnalysis}` : "No photo analysis provided."}
+PHOTO SUMMARY:
+${JSON.stringify(photoSummary || {}, null, 2)}
 
-Write the description in 2–3 short, professional sentences suitable for a geological log. Use formal geological terminology and avoid repetition.
-    `;
+PXRF SUMMARY:
+${JSON.stringify(pxrfSummary || {}, null, 2)}
 
-    // Call GPT-4 for the description
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "You are an expert exploration geologist." },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.4,
+Respond in markdown with:
+- **Description** (colour, lustre, grain size, fabric, minerals/alteration, magnetism/HCl)
+- **Interpretation** (likely rock type / context)
+- **Sampling suggestions** (1–2 bullets if warranted)
+Keep it under 180 words.
+`.trim();
+
+    // --- Call OpenAI via fetch (no SDK) ---
+    const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.4,
+        messages: [
+          { role: "system", content: "You are a concise, careful exploration geologist." },
+          { role: "user", content: prompt },
+        ],
+      }),
     });
 
-    const text = completion.choices[0].message.content.trim();
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      return res.status(500).json({ error: `Upstream ${aiRes.status}: ${errText}` });
+    }
 
+    const data = await aiRes.json();
+    const text = data?.choices?.[0]?.message?.content?.trim() || "";
     return res.status(200).json({ description: text });
-  } catch (error) {
-    console.error("Error generating geological description:", error);
-    return res.status(500).json({ error: "Failed to generate geological description." });
+  } catch (err) {
+    return res.status(500).json({ error: String(err?.message || err) });
   }
 }
