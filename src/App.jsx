@@ -1,5 +1,23 @@
 import React, { useEffect, useRef, useState } from "react";
 
+/* ------------------------- Payload fixing ------------------------- */
+async function downscaleDataUrl(dataUrl, maxDim = 1024) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL("image/jpeg", 0.85));
+    };
+    img.src = dataUrl;
+  });
+}
+
 /* ------------------------- helper UI (inline) ------------------------- */
 function Section({ title, children }) {
   return (
@@ -101,25 +119,34 @@ export default function App() {
   }
 
   /* file handlers */
-  const onFile = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    const newOnes = await Promise.all(
-      files.map(
-        (f) =>
-          new Promise((resolve) => {
-            const r = new FileReader();
-            r.onload = () => resolve({ id: Math.random().toString(36).slice(2), src: r.result });
-            r.readAsDataURL(f);
-          })
-      )
-    );
-    setPhotos((prev) => [...prev, ...newOnes]);
-    if (photos.length === 0) setActiveIdx(0);
-    // clear input so selecting same file again re-triggers
-    e.target.value = "";
-  };
+  async function onFile(e) {
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
 
+  const readers = files.map(
+    file =>
+      new Promise(resolve => {
+        const fr = new FileReader();
+        fr.onload = async ev => {
+          // Downscale the image before saving it
+          const small = await downscaleDataUrl(String(ev.target?.result), 1024);
+          resolve(small);
+        };
+        fr.readAsDataURL(file);
+      })
+  );
+
+  Promise.all(readers).then(dataUrls => {
+    setPhotos(prev => {
+      const next = [...prev, ...dataUrls.map(src => ({ id: cryptoRandom(), src }))];
+      if (prev.length === 0) setActiveIdx(0);
+      return next;
+    });
+  });
+
+  // reset input so same file can be re-selected if needed
+  e.target.value = "";
+}
   /* ---------------------- AI request (IMPORTANT) ---------------------- */
   async function generateDescription() {
     try {
