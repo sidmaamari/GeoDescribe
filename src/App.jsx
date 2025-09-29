@@ -586,6 +586,20 @@ export default function App() {
 
   const autoText = useMemo(() => buildSuggestedText(form, photo), [form, photo.summary]);
 
+  async function generateDescription() {
+  const res = await fetch("/api/describe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      form,
+      photoUrl: photo?.src || null
+    }),
+  });
+
+  const data = await res.json();
+  setDescription(data.description);
+}
+
   return (
   <div className="min-h-screen bg-slate-50 p-4 md:p-8">
     <div className="max-w-6xl mx-auto">
@@ -762,7 +776,7 @@ export default function App() {
             <div className="mt-2 flex flex-wrap gap-2">
   <button
     className="rounded-xl border px-3 py-2 text-sm cursor-pointer hover:bg-gray-100 transition active:scale-95 disabled:opacity-60"
-    onClick={requestAI}
+    onClick={generateDescription}
     disabled={aiBusy}
     title="Generate a full narrative using the AI endpoint"
   >
