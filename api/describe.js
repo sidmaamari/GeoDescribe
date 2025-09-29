@@ -1,12 +1,13 @@
 // geodescribe/api/describe.js
-// Vision-enabled endpoint: tries GPT-5 first, falls back to gpt-4o-mini.
+// Strict, observation-first vision endpoint: clear description + interpretation,
+// and a mandatory final line: "Suggested rock name: <name>"
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // --- Safe body parsing (works in Node/Edge runtimes) ---
+  // --- Safe body parsing (Node/Edge) ---
   let payload = {};
   try {
     let raw = "";
@@ -26,30 +27,37 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Missing OPENAI_API_KEY" });
   }
 
-  // Compact, structured context
+  // Compact context (keeps token usage down)
   const formBrief = JSON.stringify(form || {}, null, 0);
   const pxrfBrief = pxrfSummary ? JSON.stringify(pxrfSummary || {}, null, 0) : null;
 
-  // Prompt: pure observation; no tests unless provided
-  const userContent = [
-    {
-      type: "text",
-      text:
-        "You are an experienced field geologist. Write ONLY an observational field description based strictly on the photo and provided form data.\n\n" +
-        "RULES:\n" +
-        "- Describe only what is visible (colour, texture/fabric, grain size class if inferable, obvious minerals/alteration such as Fe-oxides). " +
-        "Do NOT mention magnetism or HCl reaction unless explicitly provided in the form.\n" +
-        "- No headings, no JSON, no bullets—just 1–2 short paragraphs suitable for a notebook entry.\n" +
-        "- Use cautious language for uncertain identifications (e.g., 'possible copper-bearing minerals').\n\n" +
-        `FORM DATA (for context): ${formBrief}\n` +
-        (pxrfBrief ? `PXRF: ${pxrfBrief}\n` : ""),
-    },
-  ];
+  // ----- STRICT STYLE RULES -----
+  // We instruct the model to: (1) write only what is observable,
+  // (2) avoid vague/filler sentences, (3) never mention unperformed tests,
+  // and (4) end with a single conclusive "Suggested rock name: <name>" line.
+  const styleRules =
+    "OUTPUT RULES:\n" +
+    "- Two short paragraphs, plain text (no headings or bullets).\n" +
+    "- Paragraph 1 = observational description ONLY (colour, texture/fabric, grain-size class if inferable, visible/likely minerals, alteration features such as Fe-oxides). Base this primarily on the photo; use form data if helpful. Do not invent details.\n" +
+    "- Paragraph 2 = scientific interpretation (genetic/process or setting) derived from the observations. Be concise and grounded in what is visible.\n" +
+    "- Never mention magnetism or HCl reaction unless explicitly provided in FORM.\n" +
+    "- Avoid vague filler such as: 'warrants further examination', 'requires further study', 'interesting assemblage', 'overall' wrap-ups, or generic cautionary sentences.\n" +
+    "- Use decisive wording when justified by evidence. Use 'possible X' only if supported by visible cues (e.g., blue-green Cu-carbonates, metallic sulfide luster, etc.).\n" +
+    "- END with a single line on its own: 'Suggested rock name: <best-fit lithologic name>'\n" +
+    "- If identification is genuinely inconclusive, write your best constrained class (e.g., 'felsic volcanic breccia' or 'Fe-oxide–altered sedimentary rock'). As a last resort, use 'Suggested rock name: indeterminate—insufficient observable constraints'.";
 
+  const userText =
+    "You are an experienced field geologist. Produce a concise, observation-led description and interpretation from the image and form.\n\n" +
+    styleRules + "\n\n" +
+    `FORM DATA (for context): ${formBrief}\n` +
+    (pxrfBrief ? `PXRF (optional): ${pxrfBrief}\n` : "");
+
+  // Build the vision message
+  const userContent = [{ type: "text", text: userText }];
   if (photoUrl) {
     userContent.push({
       type: "image_url",
-      image_url: { url: photoUrl, detail: "low" }, // 'low' keeps cost small; switch to 'high' if needed
+      image_url: { url: photoUrl, detail: "low" }, // "low" is cost-efficient and sufficient for field photos
     });
   }
 
@@ -61,8 +69,8 @@ export default async function handler(req, res) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model,
-        temperature: 0.4,
+        model,                // e.g., "gpt-4o-mini" or others you enable
+        temperature: 0.3,     // slightly lower for crisper, less hedgy prose
         messages: [
           { role: "system", content: "You are a precise, no-fluff exploration geologist." },
           { role: "user", content: userContent },
@@ -77,17 +85,22 @@ export default async function handler(req, res) {
       throw err;
     }
     const data = JSON.parse(text);
-    return data?.choices?.[0]?.message?.content?.trim() || "";
+    let out = data?.choices?.[0]?.message?.content?.trim() || "";
+
+    // Light post-filter to remove any stray headings/bullets if model disobeys
+    out = out.replace(/^\s*#+\s*/gm, "");          // strip markdown headings
+    out = out.replace(/^\s*[-*]\s+/gm, "");        // strip bullets
+    return out;
   }
 
-  // Try GPT-5 first; fall back if not permitted/available/quota issues
-  const candidates = ["gpt-5", "gpt-4o-mini"]; // order matters
+  // You can list multiple models and try them in order if you want.
+  // If you later gain access to newer models, put them first.
+  const candidates = ["gpt-4o-mini"]; // add "gpt-5" first if/when your key has access
   for (let i = 0; i < candidates.length; i++) {
     try {
       const description = await callModel(candidates[i]);
       return res.status(200).json({ description, model: candidates[i] });
     } catch (e) {
-      // Friendly messages for common cases; then try the next candidate
       if (i === candidates.length - 1) {
         const status = e.status || 500;
         const msg =
@@ -100,7 +113,7 @@ export default async function handler(req, res) {
             : `Upstream ${status}: ${String(e.message || e)}`;
         return res.status(500).json({ error: msg });
       }
-      // else, continue to next model
+      // else: try next model
     }
   }
 }
