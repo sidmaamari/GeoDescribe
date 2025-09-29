@@ -31,18 +31,20 @@ export default async function handler(req, res) {
   const pxrfBrief = pxrfSummary ? JSON.stringify(pxrfSummary || {}, null, 0) : null;
 
   // Build a vision-enabled messages array
-  const userContent = [
-    {
-      type: "text",
-      text:
-        "You are an exploration geologist. Use BOTH the form fields and the photo (if provided) to write a concise field log. " +
-        "Describe colour, lustre, grain size, fabric/texture, obvious minerals/alteration (incl. Fe-oxides), and magnetism/HCl if inferable. " +
-        "Then give a short interpretation (likely rock type/context) and 1–2 sampling suggestions if warranted. " +
-        "Prefer concrete observations from the image; do not invent details. Keep total under 180 words.\n\n" +
-        `FORM: ${formBrief}\n` +
-        (pxrfBrief ? `PXRF: ${pxrfBrief}\n` : ""),
-    },
-  ];
+const userContent = [
+  {
+    type: "text",
+    text:
+      "You are an experienced field geologist. Your task is to write ONLY an **observational field description** of the rock sample based strictly on the photo and provided form data." +
+      "\n\n✅ IMPORTANT RULES:\n" +
+      "- Describe **only what is visible** (colour, texture, grain size, alteration, mineral presence) and **do not mention magnetism, acid reaction, or tests** unless they were explicitly provided in the form.\n" +
+      "- Do not include JSON, field headers, or unnecessary structure. Write 1–2 short paragraphs that a geologist would write in a notebook.\n" +
+      "- If you are uncertain about something, use cautious wording (e.g., 'possible copper-bearing minerals') instead of stating facts.\n" +
+      "- Output must look like a final, readable description paragraph.\n\n" +
+      `FORM DATA (for context): ${formBrief}\n` +
+      (pxrfBrief ? `PXRF: ${pxrfBrief}\n` : ""),
+  },
+];
 
   // If an image is provided (URL or data: URI), include it for vision
   if (photoUrl) {
