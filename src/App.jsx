@@ -1,27 +1,37 @@
-import React, { useEffect, useRef, useState } from "react";
+// src/App.jsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ------------------------- helper UI (inline) ------------------------- */
+// ---------------- Small UI helpers ----------------
 function Section({ title, children }) {
   return (
     <section className="mb-8">
-      <h2 className="text-lg font-semibold mb-3">{title}</h2>
+      <h2 className="text-xl font-semibold mb-3">{title}</h2>
       <div className="rounded-2xl border bg-white p-4">{children}</div>
     </section>
   );
 }
 function TwoCol({ children }) {
-  return <div className="grid md:grid-cols-2 gap-3">{children}</div>;
+  return <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{children}</div>;
 }
-function TextInput({ label, type = "text", value, onChange, placeholder }) {
+function TextInput({ label, ...props }) {
   return (
     <label className="block">
-      <div className="text-sm font-medium mb-1">{label}</div>
+      <span className="block text-sm font-medium mb-1">{label}</span>
       <input
-        className="w-full rounded-xl border px-3 py-2"
-        type={type}
-        value={value}
-        onChange={onChange}
-        placeholder={placeholder}
+        className="w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-black/30"
+        {...props}
+      />
+    </label>
+  );
+}
+function TextArea({ label, ...props }) {
+  return (
+    <label className="block md:col-span-2">
+      <span className="block text-sm font-medium mb-1">{label}</span>
+      <textarea
+        rows={4}
+        className="w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-black/30"
+        {...props}
       />
     </label>
   );
@@ -29,135 +39,320 @@ function TextInput({ label, type = "text", value, onChange, placeholder }) {
 function Select({ label, options, value, onChange }) {
   return (
     <label className="block">
-      <div className="text-sm font-medium mb-1">{label}</div>
+      <span className="block text-sm font-medium mb-1">{label}</span>
       <select
-        className="w-full rounded-xl border px-3 py-2 bg-white"
-        value={value}
+        className="w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-black/30 cursor-pointer"
+        value={value ?? ""}
         onChange={(e) => onChange(e.target.value)}
       >
-        <option value="">—</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
+        <option value="" disabled>
+          Select…
+        </option>
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
           </option>
         ))}
       </select>
     </label>
   );
 }
-function TextArea({ label, value, onChange, rows = 4 }) {
+function CheckboxGroup({ options, value = [], onChange }) {
+  function toggle(v) {
+    const set = new Set(value);
+    if (set.has(v)) set.delete(v);
+    else set.add(v);
+    onChange(Array.from(set));
+  }
   return (
-    <label className="block">
-      <div className="text-sm font-medium mb-1">{label}</div>
-      <textarea
-        className="w-full rounded-xl border px-3 py-2"
-        rows={rows}
-        value={value}
-        onChange={onChange}
-      />
-    </label>
+    <div className="flex flex-wrap gap-2">
+      {options.map((opt) => {
+        const on = value.includes(opt);
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => toggle(opt)}
+            className={`px-3 py-1.5 rounded-xl border text-sm transition active:scale-95 ${
+              on ? "bg-black text-white border-black" : "hover:bg-slate-50"
+            }`}
+          >
+            {opt}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
-/* ------------------------------ enums ------------------------------ */
+// ---------------- Domain enums ----------------
 const ENUMS = {
-  context: ["Float", "Outcrop", "Subcrop", "Colluvium", "Alluvium"],
+  context: ["Outcrop", "Float", "Trench", "Dump", "Drill core"],
+  category: ["Igneous", "Sedimentary", "Metamorphic", "Hydrothermal/Alteration"],
+  weatheringGrade: ["Fresh", "Slight", "Moderate", "Strong", "Complete"],
+  lustre: ["Dull", "Waxy", "Vitreous", "Resinous", "Submetallic", "Metallic"],
+  grainSize: ["Clay", "Silt", "Very fine", "Fine", "Medium", "Coarse", "Very coarse", "Granule", "Pebble"],
+  fabric: ["Massive", "Banded", "Foliated", "Brecciated", "Vuggy"],
+  magnetism: ["None", "Weak", "Moderate", "Strong"],
+  hcl: ["No reaction", "Weak fizz", "Strong fizz"],
+  minerals: [
+    "Quartz",
+    "Feldspar",
+    "Mica",
+    "Calcite",
+    "Dolomite",
+    "Hematite",
+    "Goethite",
+    "Pyrite",
+    "Chalcopyrite",
+    "Galena",
+    "Sphalerite",
+  ],
+  alteration: [
+    "Silicification",
+    "Sericitization",
+    "Chloritization",
+    "Hematization",
+    "Argillic",
+    "Propylitic",
+  ],
+  sulfides: ["Pyrite", "Chalcopyrite", "Bornite", "Galena", "Sphalerite"],
+  sampleType: ["Grab", "Chip", "Channel", "Core", "Float"],
   hardness: ["1","2","3","4","5","6","7","8","9"],
-  lustre: ["Dull", "Earthy", "Vitreous", "Metallic", "Submetallic", "Resinous"],
-  grainSize: ["Clay", "Silt", "V.Fine Sand", "Fine Sand", "Medium Sand", "Coarse Sand", "V.Coarse Sand", "Granule", "Pebble", "Cobble", "Boulder"],
+
+  // ✅ NEW FIELDS
+  packing: ["matrix-supported", "grain-supported"],
+  textureType: ["clastic", "crystalline"],
 };
 
-/* ---------------------------- main app ----------------------------- */
+// ---------------- Helpers ----------------
+const cryptoRandom = () => Math.random().toString(36).slice(2);
+
+// Downscale any read image to ~1024px before storing/sending
+async function downscaleDataUrl(dataUrl, maxDim = 1024) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL("image/jpeg", 0.85));
+    };
+    img.src = dataUrl;
+  });
+}
+
+// ---------------- Main App ----------------
 export default function App() {
-  /* core form */
-  const [form, setForm] = useState({
+  // form model
+  const [form, setForm] = useState(() => ({
     project: "",
-    sampleId: "MDO",               // your default prefix
-    date: new Date().toISOString().slice(0, 16), // datetime-local friendly
+    sampleId: "MDO", // default prefix per your request
+    date: new Date().toISOString().slice(0, 16), // yyyy-MM-ddTHH:mm
     lat: "",
     lon: "",
     elevation: "",
     context: "",
+    hostUnit: "",
+    category: "",
+    weatheringGrade: "",
+    colourFresh: "",
+    colourWeathered: "",
     lustre: "",
     grainSize: "",
+    fabric: "",
+    streak: "",
+    magnetism: "",
+    hcl: "",
+    sg: "",
+    fabricNotes: "",
+    minerals: [],
+    alteration: [],
+    sulfides: [],
+    mineralizationNotes: "",
+    structures: "",
+    sampleType: "",
+    sampleLength_m: "",
+    pxrf: "",
     hardness: "",
-    notes: "",
-  });
 
-  /* photos */
-  const fileInputRef = useRef(null);
-  const cameraInputRef = useRef(null);
+    // ✅ NEW fields in model
+    packing: "",       // "matrix-supported" | "grain-supported"
+    textureType: "",   // "clastic" | "crystalline"
+  }));
+
   const [photos, setPhotos] = useState([]); // [{id, src}]
   const [activeIdx, setActiveIdx] = useState(0);
   const activeSrc = photos[activeIdx]?.src || null;
 
-  /* AI */
-  const [suggested, setSuggested] = useState("");
-  const [aiBusy, setAiBusy] = useState(false);
-  const [aiError, setAiError] = useState("");
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
 
-  function update(key, value) {
-    setForm((f) => ({ ...f, [key]: value }));
+  const [aiText, setAiText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function update(key, val) {
+    setForm((f) => ({ ...f, [key]: val }));
   }
 
-  /* file handlers */
-  const onFile = async (e) => {
+  function resetForm() {
+    setForm((f) => ({
+      ...f,
+      project: "",
+      sampleId: "MDO",
+      date: new Date().toISOString().slice(0, 16),
+      lat: "",
+      lon: "",
+      elevation: "",
+      context: "",
+      hostUnit: "",
+      category: "",
+      weatheringGrade: "",
+      colourFresh: "",
+      colourWeathered: "",
+      lustre: "",
+      grainSize: "",
+      fabric: "",
+      streak: "",
+      magnetism: "",
+      hcl: "",
+      sg: "",
+      fabricNotes: "",
+      minerals: [],
+      alteration: [],
+      sulfides: [],
+      mineralizationNotes: "",
+      structures: "",
+      sampleType: "",
+      sampleLength_m: "",
+      pxrf: "",
+      hardness: "",
+      packing: "",
+      textureType: "",
+    }));
+    setPhotos([]);
+    setActiveIdx(0);
+    setAiText("");
+  }
+
+  // File handling (with downscale)
+  function onFile(e) {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
-    const newOnes = await Promise.all(
-      files.map(
-        (f) =>
-          new Promise((resolve) => {
-            const r = new FileReader();
-            r.onload = () => resolve({ id: Math.random().toString(36).slice(2), src: r.result });
-            r.readAsDataURL(f);
-          })
-      )
+    const readers = files.map(
+      (file) =>
+        new Promise((resolve) => {
+          const fr = new FileReader();
+          fr.onload = async (ev) => {
+            const small = await downscaleDataUrl(String(ev.target?.result), 1024);
+            resolve(small);
+          };
+          fr.readAsDataURL(file);
+        })
     );
-    setPhotos((prev) => [...prev, ...newOnes]);
-    if (photos.length === 0) setActiveIdx(0);
-    // clear input so selecting same file again re-triggers
+    Promise.all(readers).then((dataUrls) => {
+      setPhotos((prev) => {
+        const next = [...prev, ...dataUrls.map((src) => ({ id: cryptoRandom(), src }))];
+        if (prev.length === 0) setActiveIdx(0);
+        return next;
+      });
+    });
     e.target.value = "";
-  };
+  }
 
-  /* ---------------------- AI request (IMPORTANT) ---------------------- */
-  async function generateDescription() {
+  // Export helpers
+  function exportJSON() {
+    const payload = {
+      form,
+      photos: photos.map((p) => p.src),
+      generated: aiText,
+      createdAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${form.sampleId || "sample"}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportMarkdown() {
+    const md = [
+      `# Sample ${form.sampleId || ""}`,
+      `**Project:** ${form.project || ""}`,
+      `**Date/time:** ${form.date || ""}`,
+      `**Location:** ${form.lat || ""}, ${form.lon || ""} (elev ${form.elevation || ""} m)`,
+      "",
+      "## Standard description fields",
+      `- Context: ${form.context || ""}`,
+      `- Category: ${form.category || ""}`,
+      `- Weathering grade: ${form.weatheringGrade || ""}`,
+      `- Hardness (Mohs): ${form.hardness || ""}`,
+      `- Colour (fresh): ${form.colourFresh || ""}`,
+      `- Colour (weathered): ${form.colourWeathered || ""}`,
+      `- Lustre: ${form.lustre || ""}`,
+      `- Grain size: ${form.grainSize || ""}`,
+      `- Fabric: ${form.fabric || ""}`,
+      `- Streak: ${form.streak || ""}`,
+      `- Magnetism: ${form.magnetism || ""}`,
+      `- HCl reaction: ${form.hcl || ""}`,
+      `- Specific gravity (qual): ${form.sg || ""}`,
+      `- Minerals: ${form.minerals.join(", ")}`,
+      `- Alteration: ${form.alteration.join(", ")}`,
+      `- Sulfides: ${form.sulfides.join(", ")}`,
+      `- Mineralization notes: ${form.mineralizationNotes || ""}`,
+      `- Structures: ${form.structures || ""}`,
+      "",
+      "## Sampling",
+      `- Sample type: ${form.sampleType || ""}`,
+      `- Sample length (m): ${form.sampleLength_m || ""}`,
+      "",
+      "## New fields",
+      `- Packing: ${form.packing || ""}`,
+      `- Texture: ${form.textureType || ""}`,
+      "",
+      "## AI Suggested narrative",
+      aiText || "—",
+    ].join("\n");
+
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${form.sampleId || "sample"}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // AI generate
+  async function generateAI() {
+    setBusy(true);
+    setAiText("");
     try {
-      setAiError("");
-      setAiBusy(true);
-
-      // 25s timeout guard so the UI never hangs forever
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 25000);
-
-      const res = await fetch("/api/describe", {
+      const r = await fetch("/api/describe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           form,
-          photoUrl: activeSrc || null, // ← include current photo
+          photoUrl: activeSrc || null,
         }),
-        signal: ctrl.signal,
       });
-
-      clearTimeout(timer);
-
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      setSuggested(data.description || data.text || "(no description returned)");
-    } catch (err) {
-      console.error("AI error:", err);
-      setAiError(typeof err?.message === "string" ? err.message : "Failed to generate description.");
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "API error");
+      setAiText(data.description || "");
+    } catch (e) {
+      setAiText(`(Error) ${String(e.message || e)}`);
     } finally {
-      setAiBusy(false);
+      setBusy(false);
     }
   }
 
-  /* ------------------------------ view ------------------------------ */
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
       <div className="max-w-6xl mx-auto">
@@ -166,18 +361,20 @@ export default function App() {
           <h1 className="text-2xl md:text-3xl font-bold">GeoDescribe – Field Rock Logger</h1>
           <div className="flex gap-2">
             <button
-              className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-100 active:scale-95"
-              onClick={() => {
-                setForm({
-                  ...form,
-                  sampleId: "MDO",
-                  date: new Date().toISOString().slice(0, 16),
-                });
-                setPhotos([]);
-                setActiveIdx(0);
-                setSuggested("");
-                setAiError("");
-              }}
+              className="rounded-xl px-4 py-2 bg-black text-white cursor-pointer hover:bg-gray-800 transition active:scale-95"
+              onClick={exportMarkdown}
+            >
+              Export Markdown
+            </button>
+            <button
+              className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
+              onClick={exportJSON}
+            >
+              Export JSON (share)
+            </button>
+            <button
+              className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
+              onClick={resetForm}
             >
               New Sample
             </button>
@@ -187,8 +384,16 @@ export default function App() {
         {/* Sample & Location */}
         <Section title="Sample & Location">
           <TwoCol>
-            <TextInput label="Project" value={form.project} onChange={(e) => update("project", e.target.value)} />
-            <TextInput label="Sample ID" value={form.sampleId} onChange={(e) => update("sampleId", e.target.value)} />
+            <TextInput
+              label="Project"
+              value={form.project}
+              onChange={(e) => update("project", e.target.value)}
+            />
+            <TextInput
+              label="Sample ID"
+              value={form.sampleId}
+              onChange={(e) => update("sampleId", e.target.value)}
+            />
             <TextInput
               label="Date/time"
               type="datetime-local"
@@ -205,45 +410,36 @@ export default function App() {
               onChange={(e) => update("elevation", e.target.value)}
             />
             <Select label="Context" options={ENUMS.context} value={form.context} onChange={(v) => update("context", v)} />
-            <Select
-              label="Lustre"
-              options={ENUMS.lustre}
-              value={form.lustre}
-              onChange={(v) => update("lustre", v)}
+            <TextInput
+              label="Host unit / Formation"
+              value={form.hostUnit}
+              onChange={(e) => update("hostUnit", e.target.value)}
             />
             <Select
-              label="Grain size / class"
-              options={ENUMS.grainSize}
-              value={form.grainSize}
-              onChange={(v) => update("grainSize", v)}
+              label="Category"
+              options={ENUMS.category}
+              value={form.category}
+              onChange={(v) => update("category", v)}
             />
-            <Select
-              label="Hardness (Mohs)"
-              options={ENUMS.hardness}
-              value={form.hardness}
-              onChange={(v) => update("hardness", v)}
-            />
-            <TextArea label="Notes" value={form.notes} onChange={(e) => update("notes", e.target.value)} />
           </TwoCol>
         </Section>
 
         {/* Photo */}
         <Section title="Photo">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-            {/* Left: picker + thumbnail gallery */}
             <div>
               <div className="flex gap-3">
                 <button
                   type="button"
-                  className="rounded-xl px-4 py-2 border text-sm md:text-base cursor-pointer hover:bg-slate-100 active:scale-95"
+                  className="rounded-xl px-4 py-2 border text-sm md:text-base cursor-pointer hover:bg-slate-50 active:scale-95"
                   onClick={() => cameraInputRef.current?.click()}
-                  aria-label="Capture a new photo"
+                  aria-label="Capture a photo"
                 >
                   📷 Take Photo
                 </button>
                 <button
                   type="button"
-                  className="rounded-xl px-4 py-2 border text-sm md:text-base cursor-pointer hover:bg-slate-100 active:scale-95"
+                  className="rounded-xl px-4 py-2 border text-sm md:text-base cursor-pointer hover:bg-slate-50 active:scale-95"
                   onClick={() => fileInputRef.current?.click()}
                   aria-label="Choose existing image files"
                 >
@@ -251,7 +447,7 @@ export default function App() {
                 </button>
               </div>
 
-              {/* hidden inputs */}
+              {/* Hidden inputs */}
               <input
                 ref={cameraInputRef}
                 type="file"
@@ -289,7 +485,7 @@ export default function App() {
                       key={p.id}
                       onClick={() => setActiveIdx(i)}
                       className={`relative border rounded-xl p-1 cursor-pointer ${
-                        i === activeIdx ? "ring-2 ring-black" : ""
+                        i === activeIdx ? "ring-2 ring-black" : "hover:bg-slate-50"
                       }`}
                       title={`Photo ${i + 1}`}
                     >
@@ -302,7 +498,7 @@ export default function App() {
               {photos.length > 0 && (
                 <div className="mt-2 flex gap-2">
                   <button
-                    className="rounded-xl border px-3 py-1.5 text-sm cursor-pointer hover:bg-slate-100 active:scale-95"
+                    className="rounded-xl border px-3 py-1.5 text-sm cursor-pointer hover:bg-slate-50 active:scale-95"
                     onClick={() => {
                       setPhotos((prev) => {
                         if (activeIdx === 0) return prev;
@@ -317,7 +513,7 @@ export default function App() {
                     Set as primary
                   </button>
                   <button
-                    className="rounded-xl border px-3 py-1.5 text-sm cursor-pointer hover:bg-slate-100 active:scale-95"
+                    className="rounded-xl border px-3 py-1.5 text-sm cursor-pointer hover:bg-slate-50 active:scale-95"
                     onClick={() => {
                       setPhotos((prev) => {
                         if (!prev.length) return prev;
@@ -335,29 +531,140 @@ export default function App() {
               )}
             </div>
 
-            {/* Right: Analyzer + AI */}
+            {/* AI panel */}
             <div>
               <p className="text-sm text-slate-600 mb-2">
                 Generate a concise field description using the active photo and form fields.
               </p>
-
               <button
-                className="mt-1 rounded-xl border px-3 py-2 text-sm cursor-pointer hover:bg-slate-100 active:scale-95 disabled:opacity-50"
-                onClick={generateDescription}
-                disabled={aiBusy}
+                className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
+                onClick={generateAI}
+                disabled={busy}
+                title="Generate with AI"
               >
-                {aiBusy ? "Generating…" : "Generate AI description"}
+                {busy ? "Generating…" : "Generate AI description"}
               </button>
-
-              {aiError && <div className="mt-2 text-sm text-red-600 break-words">{aiError}</div>}
-
-              {suggested && (
-                <div className="mt-3 text-sm bg-amber-50 border rounded-xl p-3 whitespace-pre-wrap">
-                  {suggested}
-                </div>
-              )}
+              <div className="mt-3 rounded-xl border p-3 bg-amber-50 whitespace-pre-wrap text-sm min-h-[120px]">
+                {aiText || "—"}
+              </div>
             </div>
           </div>
+        </Section>
+
+        {/* Standard description fields */}
+        <Section title="Standard description fields">
+          <TwoCol>
+            <Select
+              label="Weathering grade"
+              options={ENUMS.weatheringGrade}
+              value={form.weatheringGrade}
+              onChange={(v) => update("weatheringGrade", v)}
+            />
+            <Select
+              label="Hardness (Mohs / scratch test)"
+              options={ENUMS.hardness}
+              value={form.hardness}
+              onChange={(v) => update("hardness", v)}
+            />
+            <TextInput
+              label="Colour (fresh)"
+              value={form.colourFresh}
+              onChange={(e) => update("colourFresh", e.target.value)}
+            />
+            <TextInput
+              label="Colour (weathered)"
+              value={form.colourWeathered}
+              onChange={(e) => update("colourWeathered", e.target.value)}
+            />
+            <Select label="Lustre" options={ENUMS.lustre} value={form.lustre} onChange={(v) => update("lustre", v)} />
+            <Select
+              label="Grain size / class"
+              options={ENUMS.grainSize}
+              value={form.grainSize}
+              onChange={(v) => update("grainSize", v)}
+            />
+            <Select label="Fabric" options={ENUMS.fabric} value={form.fabric} onChange={(v) => update("fabric", v)} />
+            <TextInput label="Streak colour" value={form.streak} onChange={(e) => update("streak", e.target.value)} />
+            <Select
+              label="Magnetism"
+              options={ENUMS.magnetism}
+              value={form.magnetism}
+              onChange={(v) => update("magnetism", v)}
+            />
+            <Select label="HCl reaction" options={ENUMS.hcl} value={form.hcl} onChange={(v) => update("hcl", v)} />
+            <TextInput
+              label="Specific gravity (qualitative)"
+              value={form.sg}
+              onChange={(e) => update("sg", e.target.value)}
+            />
+            <TextArea
+              label="Fabric / texture notes"
+              value={form.fabricNotes}
+              onChange={(e) => update("fabricNotes", e.target.value)}
+            />
+
+            {/* ✅ NEW FIELD: Packing */}
+            <Select
+              label="Packing"
+              options={ENUMS.packing}
+              value={form.packing}
+              onChange={(v) => update("packing", v)}
+            />
+
+            {/* ✅ NEW FIELD: Texture Type */}
+            <Select
+              label="Texture"
+              options={ENUMS.textureType}
+              value={form.textureType}
+              onChange={(v) => update("textureType", v)}
+            />
+          </TwoCol>
+
+          <div className="mt-2">
+            <div className="mb-1 text-sm font-medium">Minerals present</div>
+            <CheckboxGroup options={ENUMS.minerals} value={form.minerals} onChange={(v) => update("minerals", v)} />
+          </div>
+
+          <div className="mt-2">
+            <div className="mb-1 text-sm font-medium">Alteration</div>
+            <CheckboxGroup options={ENUMS.alteration} value={form.alteration} onChange={(v) => update("alteration", v)} />
+          </div>
+
+          <div className="mt-2">
+            <div className="mb-1 text-sm font-medium">Sulfides observed</div>
+            <CheckboxGroup options={ENUMS.sulfides} value={form.sulfides} onChange={(v) => update("sulfides", v)} />
+          </div>
+
+          <TwoCol>
+            <TextArea
+              label="Mineralization notes"
+              value={form.mineralizationNotes}
+              onChange={(e) => update("mineralizationNotes", e.target.value)}
+            />
+            <TextArea
+              label="Structures (veins, shear, breccia type, orientations)"
+              value={form.structures}
+              onChange={(e) => update("structures", e.target.value)}
+            />
+          </TwoCol>
+        </Section>
+
+        {/* Sampling & extra */}
+        <Section title="Sampling & extra">
+          <TwoCol>
+            <Select
+              label="Sample type"
+              options={ENUMS.sampleType}
+              value={form.sampleType}
+              onChange={(v) => update("sampleType", v)}
+            />
+            <TextInput
+              label="Sample length (m)"
+              value={form.sampleLength_m}
+              onChange={(e) => update("sampleLength_m", e.target.value)}
+            />
+            <TextArea label="pXRF summary (if any)" value={form.pxrf} onChange={(e) => update("pxrf", e.target.value)} />
+          </TwoCol>
         </Section>
 
         {/* Footer */}
