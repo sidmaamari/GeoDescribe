@@ -64,7 +64,7 @@ const ENUMS = {
   context: ["Float", "Outcrop", "Subcrop", "Colluvium", "Alluvium"],
   hardness: ["1","2","3","4","5","6","7","8","9"],
   lustre: ["Dull", "Earthy", "Vitreous", "Metallic", "Submetallic", "Resinous"],
-  grainSize: ["Clay", "Silt", "Sand", "Granule", "Pebble", "Cobble", "Boulder"],
+  grainSize: ["Clay", "Silt", "V.Fine Sand", "Fine Sand", "Medium Sand", "Coarse Sand", "V.Coarse Sand", "Granule", "Pebble", "Cobble", "Boulder"],
 };
 
 /* ---------------------------- main app ----------------------------- */
