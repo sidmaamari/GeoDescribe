@@ -1,1 +1,4 @@
 @import "tailwindcss";
+
+/* App base tweaks */
+body { background: #f8fafc; }

@@ -1,5 +1,16 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  saveOutcropLog,
+  listOutcropLogs,
+  deleteOutcropLog,
+  loadOutcropLog,
+  saveBoreholeLog,
+  listBoreholeLogs,
+  deleteBoreholeLog,
+  loadBoreholeLog,
+  exportBoreholeCSV,
+} from "./storage";
 
 // ---------------- Small UI helpers ----------------
 function Section({ title, children }) {
@@ -240,6 +251,29 @@ export default function App() {
     setAiText("");
   }
 
+  // Save current outcrop sample to local device storage
+  async function saveCurrentOutcrop() {
+    const payload = {
+      form,
+      photos: photos.map((p) => p.src),
+      generated: aiText,
+      createdAt: new Date().toISOString(),
+    };
+    await saveOutcropLog(payload);
+    // If the Saved tab is open, refresh it
+    if (tab === 'saved') await refreshSaved();
+  }
+
+  async function loadOutcropIntoForm(id) {
+    const data = await loadOutcropLog(id);
+    if (!data) return;
+    setForm((f) => ({ ...f, ...data.form }));
+    setPhotos((data.photos || []).map((src) => ({ id: cryptoRandom(), src })));
+    setActiveIdx(0);
+    setAiText(data.generated || "");
+    setTab('outcrop');
+  }
+
   // File handling (with downscale)
   function onFile(e) {
     const files = Array.from(e.target.files || []);
@@ -353,32 +387,169 @@ export default function App() {
     }
   }
 
+  const [tab, setTab] = useState('outcrop');
+
+  // ---------------- Borehole state ----------------
+  const [bh, setBh] = useState(() => ({
+    holeId: 'BH-1',
+    project: '',
+    createdAt: new Date().toISOString(),
+    collar: { lat: '', lon: '', elev: '', azimuth: '', dip: '' },
+    intervals: [],
+  }));
+
+  function updateBh(path, value) {
+    setBh((prev) => {
+      const next = { ...prev };
+      if (path.startsWith('collar.')) {
+        const k = path.split('.')[1];
+        next.collar = { ...next.collar, [k]: value };
+      } else {
+        next[path] = value;
+      }
+      return next;
+    });
+  }
+
+  function addInterval() {
+    setBh((prev) => ({
+      ...prev,
+      intervals: [
+        ...prev.intervals,
+        { id: cryptoRandom(), from: '', to: '', unit: '', description: '', notes: '' },
+      ],
+    }));
+  }
+
+  function updateInterval(id, field, val) {
+    setBh((prev) => ({
+      ...prev,
+      intervals: prev.intervals.map((iv) => (iv.id === id ? { ...iv, [field]: val } : iv)),
+    }));
+  }
+
+  function deleteInterval(id) {
+    setBh((prev) => ({ ...prev, intervals: prev.intervals.filter((iv) => iv.id !== id) }));
+  }
+
+  async function saveCurrentBorehole() {
+    const payload = { ...bh, createdAt: bh.createdAt || new Date().toISOString() };
+    await saveBoreholeLog(payload);
+    if (tab === 'saved') await refreshSaved();
+  }
+
+  async function loadBoreholeIntoForm(id) {
+    const data = await loadBoreholeLog(id);
+    if (!data) return;
+    // ensure each interval has an id for UI keys
+    const intervals = (data.intervals || []).map((iv) => ({ id: cryptoRandom(), ...iv }));
+    setBh({ ...data, intervals });
+    setTab('borehole');
+  }
+
+  async function exportBhCSV() {
+    const blob = await exportBoreholeCSV(bh);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${bh.holeId || 'borehole'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function resetBorehole() {
+    setBh({
+      holeId: 'BH-1',
+      project: '',
+      createdAt: new Date().toISOString(),
+      collar: { lat: '', lon: '', elev: '', azimuth: '', dip: '' },
+      intervals: [],
+    });
+  }
+
+  // ---------------- Saved lists ----------------
+  const [savedOutcrops, setSavedOutcrops] = useState([]);
+  const [savedBoreholes, setSavedBoreholes] = useState([]);
+
+  async function refreshSaved() {
+    const [o, b] = await Promise.all([listOutcropLogs(), listBoreholeLogs()]);
+    setSavedOutcrops(o.sort((a,b)=> String(b.date||'').localeCompare(String(a.date||''))));
+    setSavedBoreholes(b.sort((a,b)=> String(b.date||'').localeCompare(String(a.date||''))));
+  }
+
+  useEffect(() => {
+    if (tab === 'saved') {
+      void refreshSaved();
+    }
+  }, [tab]);
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <header className="mb-6 sticky top-0 z-50 bg-slate-50/70 backdrop-blur flex items-center justify-between">
-          <h1 className="text-2xl md:text-3xl font-bold">GeoDescribe – Field Rock Logger</h1>
-          <div className="flex gap-2">
-            <button
-              className="rounded-xl px-4 py-2 bg-black text-white cursor-pointer hover:bg-gray-800 transition active:scale-95"
-              onClick={exportMarkdown}
-            >
-              Export Markdown
-            </button>
-            <button
-              className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
-              onClick={exportJSON}
-            >
-              Export JSON (share)
-            </button>
-            <button
-              className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
-              onClick={resetForm}
-            >
-              New Sample
-            </button>
+        <header className="mb-6 sticky top-0 z-50 bg-slate-50/70 backdrop-blur">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl md:text-3xl font-bold">GeoDescribe – Geological Logger</h1>
+            <div className="flex gap-2">
+              <button
+                className="rounded-xl px-4 py-2 bg-black text-white cursor-pointer hover:bg-gray-800 transition active:scale-95"
+                onClick={exportMarkdown}
+              >
+                Export Markdown
+              </button>
+              <button
+                className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
+                onClick={exportJSON}
+              >
+                Export JSON (share)
+              </button>
+              {tab === 'outcrop' && (
+                <button
+                  className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
+                  onClick={saveCurrentOutcrop}
+                >
+                  Save Sample
+                </button>
+              )}
+              {tab === 'borehole' && (
+                <>
+                  <button
+                    className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
+                    onClick={saveCurrentBorehole}
+                  >
+                    Save Borehole
+                  </button>
+                  <button
+                    className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
+                    onClick={exportBhCSV}
+                  >
+                    Export CSV
+                  </button>
+                </>
+              )}
+              <button
+                className="rounded-xl px-4 py-2 border cursor-pointer hover:bg-slate-50 active:scale-95"
+                onClick={resetForm}
+              >
+                New Sample
+              </button>
+            </div>
           </div>
+          <nav className="mt-3 flex gap-2">
+            {[
+              { id: 'outcrop', label: 'Outcrop/Hand specimen' },
+              { id: 'borehole', label: 'Borehole' },
+              { id: 'saved', label: 'Saved' },
+            ].map((t) => (
+              <button
+                key={t.id}
+                className={`px-3 py-1.5 rounded-xl border text-sm cursor-pointer ${tab===t.id? 'bg-black text-white border-black' : 'hover:bg-slate-50'}`}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
         </header>
 
         {/* Sample & Location */}
@@ -424,6 +595,8 @@ export default function App() {
           </TwoCol>
         </Section>
 
+        {tab === 'outcrop' && (
+        <>
         {/* Photo */}
         <Section title="Photo">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
@@ -666,6 +839,139 @@ export default function App() {
             <TextArea label="pXRF summary (if any)" value={form.pxrf} onChange={(e) => update("pxrf", e.target.value)} />
           </TwoCol>
         </Section>
+        </>
+        )}
+
+        {tab === 'saved' && (
+          <>
+            <Section title="Saved – Outcrops">
+              {savedOutcrops.length === 0 ? (
+                <div className="text-sm text-slate-500">No saved outcrops.</div>
+              ) : (
+                <div className="space-y-2">
+                  {savedOutcrops.map((s) => (
+                    <div key={`o-${s.id}`} className="flex items-center justify-between rounded-xl border p-3">
+                      <div className="text-sm">
+                        <div className="font-medium">{s.title}</div>
+                        <div className="text-slate-500">{s.project} · {s.date}</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"
+                          onClick={() => loadOutcropIntoForm(s.id)}
+                        >Open</button>
+                        <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"
+                          onClick={async () => {
+                            const rec = await loadOutcropLog(s.id);
+                            if (!rec) return;
+                            const blob = new Blob([JSON.stringify(rec, null, 2)], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `${s.id}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        >Export JSON</button>
+                        <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"
+                          onClick={async () => { await deleteOutcropLog(s.id); await refreshSaved(); }}
+                        >Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+
+            <Section title="Saved – Boreholes">
+              {savedBoreholes.length === 0 ? (
+                <div className="text-sm text-slate-500">No saved boreholes.</div>
+              ) : (
+                <div className="space-y-2">
+                  {savedBoreholes.map((s) => (
+                    <div key={`b-${s.id}`} className="flex items-center justify-between rounded-xl border p-3">
+                      <div className="text-sm">
+                        <div className="font-medium">{s.title}</div>
+                        <div className="text-slate-500">{s.project} · {s.intervalCount} intervals</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"
+                          onClick={() => loadBoreholeIntoForm(s.id)}
+                        >Open</button>
+                        <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"
+                          onClick={async () => {
+                            const rec = await loadBoreholeLog(s.id);
+                            if (!rec) return;
+                            const blob = await exportBoreholeCSV(rec);
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `${s.title || s.id}.csv`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        >Export CSV</button>
+                        <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"
+                          onClick={async () => { await deleteBoreholeLog(s.id); await refreshSaved(); }}
+                        >Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+          </>
+        )}
+
+        {tab === 'borehole' && (
+          <>
+            <Section title="Borehole metadata">
+              <TwoCol>
+                <TextInput label="Hole ID" value={bh.holeId} onChange={(e)=>updateBh('holeId', e.target.value)} />
+                <TextInput label="Project" value={bh.project} onChange={(e)=>updateBh('project', e.target.value)} />
+                <div className="grid grid-cols-2 gap-3">
+                  <TextInput label="Latitude" value={bh.collar.lat} onChange={(e)=>updateBh('collar.lat', e.target.value)} />
+                  <TextInput label="Longitude" value={bh.collar.lon} onChange={(e)=>updateBh('collar.lon', e.target.value)} />
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <TextInput label="Elevation (m)" value={bh.collar.elev} onChange={(e)=>updateBh('collar.elev', e.target.value)} />
+                  <TextInput label="Azimuth (°)" value={bh.collar.azimuth} onChange={(e)=>updateBh('collar.azimuth', e.target.value)} />
+                  <TextInput label="Dip (°)" value={bh.collar.dip} onChange={(e)=>updateBh('collar.dip', e.target.value)} />
+                </div>
+              </TwoCol>
+              <div className="mt-3 flex gap-2">
+                <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50" onClick={addInterval}>Add interval</button>
+                <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50" onClick={resetBorehole}>New borehole</button>
+              </div>
+            </Section>
+
+            <Section title="Intervals">
+              {bh.intervals.length === 0 ? (
+                <div className="text-sm text-slate-500">No intervals yet.</div>
+              ) : (
+                <div className="space-y-3">
+                  {bh.intervals.map((iv) => (
+                    <div key={iv.id} className="rounded-xl border p-3">
+                      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-start">
+                        <TextInput label="From (m)" value={iv.from} onChange={(e)=>updateInterval(iv.id,'from', e.target.value)} />
+                        <TextInput label="To (m)" value={iv.to} onChange={(e)=>updateInterval(iv.id,'to', e.target.value)} />
+                        <TextInput label="Unit" value={iv.unit} onChange={(e)=>updateInterval(iv.id,'unit', e.target.value)} />
+                        <div className="md:col-span-2">
+                          <TextArea label="Description" value={iv.description} onChange={(e)=>updateInterval(iv.id,'description', e.target.value)} />
+                        </div>
+                        <div className="md:col-span-1">
+                          <TextArea label="Notes" value={iv.notes} onChange={(e)=>updateInterval(iv.id,'notes', e.target.value)} />
+                        </div>
+                      </div>
+                      <div className="mt-2">
+                        <button className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50" onClick={()=>deleteInterval(iv.id)}>Delete interval</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+          </>
+        )}
 
         {/* Footer */}
         <footer className="mt-8 text-center text-xs text-slate-500">
